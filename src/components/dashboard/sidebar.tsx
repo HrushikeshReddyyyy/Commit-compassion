@@ -72,7 +72,7 @@ export function Sidebar({
                 <div className="ml-2 flex flex-1 items-center justify-between overflow-hidden">
                   <span className="truncate text-sm">{repo.name}</span>
                   {repo.isPrivate && (
-                    <Badge variant="outline\" className="ml-2 text-xs">
+                    <Badge variant="outline" className="ml-2 text-xs">
                       Private
                     </Badge>
                   )}

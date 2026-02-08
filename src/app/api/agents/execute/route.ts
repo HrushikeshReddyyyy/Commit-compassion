@@ -33,41 +33,47 @@ export async function POST(request: NextRequest) {
 
     const [, repoOwner, repoName, issueNumber] = urlMatch;
 
-    // Create a session in the database
+    // Create a session in the database (optional - continues if not configured)
     const supabase = createServerClient();
     const sessionId = crypto.randomUUID();
 
-    const { error: dbError } = await supabase.from("sessions").insert({
-      id: sessionId,
-      issue_url: issueUrl,
-      repo_owner: repoOwner,
-      repo_name: repoName,
-      issue_number: parseInt(issueNumber, 10),
-      status: "running",
-      agent_logs: [],
-    });
-
-    if (dbError) {
-      console.error("Database error:", dbError);
-      // Continue even if database fails - we can still run the agents
+    if (supabase) {
+      try {
+        await supabase.from("sessions").insert({
+          id: sessionId,
+          issue_url: issueUrl,
+          repo_owner: repoOwner,
+          repo_name: repoName,
+          issue_number: parseInt(issueNumber, 10),
+          status: "running",
+          agent_logs: [],
+        });
+      } catch (dbError) {
+        console.error("Database error:", dbError);
+        // Continue even if database fails - we can still run the agents
+      }
     }
 
     // Start the agent workflow asynchronously
     executeAgentWorkflow(issueUrl, sessionId, async (state) => {
       // Update the session with new state
+      if (!supabase) return;
+
       try {
+        const status = state.status === "complete" ? "completed" :
+                       state.status === "error" ? "failed" : "running";
+
         await supabase
           .from("sessions")
           .update({
-            status: state.status === "complete" ? "completed" :
-                   state.status === "error" ? "failed" : "running",
+            status,
             agent_logs: state.logs.map((log) => ({
               timestamp: log.timestamp.toISOString(),
               agent: log.agent,
               type: log.type,
               content: log.content,
             })),
-            proposed_fix: state.proposedFix,
+            proposed_fix: state.proposedFix ? JSON.stringify(state.proposedFix) : null,
             error_message: state.error,
           })
           .eq("id", sessionId);
@@ -77,13 +83,15 @@ export async function POST(request: NextRequest) {
     }).catch((error) => {
       console.error("Agent workflow error:", error);
       // Update session with error
-      supabase
-        .from("sessions")
-        .update({
-          status: "failed",
-          error_message: error instanceof Error ? error.message : "Unknown error",
-        })
-        .eq("id", sessionId);
+      if (supabase) {
+        supabase
+          .from("sessions")
+          .update({
+            status: "failed",
+            error_message: error instanceof Error ? error.message : "Unknown error",
+          })
+          .eq("id", sessionId);
+      }
     });
 
     return NextResponse.json({
@@ -118,6 +126,13 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = createServerClient();
+
+    if (!supabase) {
+      return NextResponse.json(
+        { error: "Database not configured" },
+        { status: 503 }
+      );
+    }
 
     const { data, error } = await supabase
       .from("sessions")
